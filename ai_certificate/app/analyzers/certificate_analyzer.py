@@ -109,25 +109,17 @@ class ProductionCertificateAnalyzer:
         # ML models (optional)
         if self.use_ml and settings.use_ml:
             try:
-                donut_model_path = r"C:\Users\admin\ai_certificate\models\donut_certificate"
+                logger.info("Loading Donut from HuggingFace cache")
+                self.donut_parser = DonutCertificateParser(model_path=None)
                 
-                # Quick check if path exists
-                if os.path.exists(donut_model_path):
-                    logger.info(f"Loading Donut from: {donut_model_path}")
-                    self.donut_parser = DonutCertificateParser(model_path=donut_model_path)
-                    
-                    # Test the model
-                    health = self.donut_parser.health_check()
-                    logger.info(f"Donut health check: {health}")
-                    
-                    if health["ready"]:
-                        self.ml_extractor = MLFieldExtractor()
-                        logger.info("ML models loaded successfully")
-                    else:
-                        logger.warning("Donut model not ready, disabling ML")
-                        self.use_ml = False
+                health = self.donut_parser.health_check()
+                logger.info(f"Donut health check: {health}")
+                
+                if health["ready"]:
+                    self.ml_extractor = MLFieldExtractor()
+                    logger.info("ML models loaded successfully")
                 else:
-                    logger.warning(f"Model path doesn't exist: {donut_model_path}")
+                    logger.warning("Donut model not ready, disabling ML")
                     self.use_ml = False
                     
             except Exception as e:
@@ -584,7 +576,10 @@ class ProductionCertificateAnalyzer:
             
             # Cache result
             if self._redis_available:
-                await self._safe_redis_setex(cache_key, self.CACHE_TTL, final_report)
+                cache_data = final_report.copy()
+                if 'recommendation_result' in cache_data and hasattr(cache_data['recommendation_result'], 'dict'):
+                    cache_data['recommendation_result'] = cache_data['recommendation_result'].dict()
+                await self._safe_redis_setex(cache_key, self.CACHE_TTL, cache_data)
             
             logger.info(f"URL analysis completed in {processing_time}s")
             return final_report
@@ -697,7 +692,10 @@ class ProductionCertificateAnalyzer:
             
             # Cache result
             if self._redis_available:
-                await self._safe_redis_setex(cache_key, self.CACHE_TTL, final_report)
+                cache_data = final_report.copy()
+                if 'recommendation_result' in cache_data and hasattr(cache_data['recommendation_result'], 'dict'):
+                    cache_data['recommendation_result'] = cache_data['recommendation_result'].dict()
+                await self._safe_redis_setex(cache_key, self.CACHE_TTL, cache_data)
             
             logger.info(f"AI analysis completed in {processing_time}s")
             return final_report

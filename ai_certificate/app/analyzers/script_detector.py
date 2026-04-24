@@ -159,15 +159,62 @@ class ScriptDetector:
                 gray = image
             
             # Fast preprocessing
-            gray = cv2.resize(gray, (800, 800))  # Resize for speed
+            gray = cv2.resize(gray, (800, 800))
             gray = cv2.GaussianBlur(gray, (3, 3), 0)
+            
+            # Quick text extraction to check Unicode ranges
+            raw_text_sample = ""
+            try:
+                config_quick = '--oem 1 --psm 3 --dpi 150'
+                raw_text_sample = pytesseract.image_to_string(gray, config=config_quick)
+            except:
+                pass
+            
+            # Count Ethiopic characters in raw sample
+            ethiopic_char_count = sum(1 for char in raw_text_sample if self._is_ethiopic_char(char))
+            total_chars = len([c for c in raw_text_sample if c.strip()])
+            
+            # If we detect significant Ethiopic characters, it's Amharic
+            if total_chars > 0:
+                ethiopic_ratio = ethiopic_char_count / total_chars
+                
+                if ethiopic_ratio > 0.3:
+                    try:
+                        config_amh = '--oem 1 --psm 3 -l amh --dpi 150'
+                        amh_text = pytesseract.image_to_string(gray, config=config_amh)
+                        amh_confidence = self._calculate_ocr_confidence(amh_text, 'amh')
+                        
+                        return {
+                            'script': 'amh',
+                            'confidence': max(0.7, amh_confidence),
+                            'method': 'ocr_amharic_unicode_detected',
+                            'details': {
+                                'ethiopic_ratio': ethiopic_ratio,
+                                'ethiopic_chars': ethiopic_char_count,
+                                'total_chars': total_chars,
+                                'amh_confidence': amh_confidence,
+                                'amh_text_length': len(amh_text.strip())
+                            }
+                        }
+                    except Exception as e:
+                        logger.warning(f"Amharic OCR failed after Unicode detection: {e}")
+                        return {
+                            'script': 'amh',
+                            'confidence': 0.6,
+                            'method': 'unicode_detection_only',
+                            'details': {
+                                'ethiopic_ratio': ethiopic_ratio,
+                                'ethiopic_chars': ethiopic_char_count,
+                                'ocr_error': str(e)
+                            }
+                        }
             
             # Try English OCR (fast)
             config_eng = '--oem 1 --psm 3 -l eng --dpi 150'
             eng_text = pytesseract.image_to_string(gray, config=config_eng)
             eng_confidence = self._calculate_ocr_confidence(eng_text, 'eng')
             
-            # Try Amharic OCR if available
+            # Try Amharic OCR if available (as fallback)
             amh_text = ""
             amh_confidence = 0.0
             
@@ -355,29 +402,41 @@ class ScriptDetector:
             return 0.0
         
         clean_text = text.strip()
-        total_chars = len(clean_text)
+        
+        # Count only alphanumeric and Ethiopic characters (ignore whitespace/punctuation)
+        meaningful_chars = [c for c in clean_text if c.isalnum() or self._is_ethiopic_char(c)]
+        total_chars = len(meaningful_chars)
+        
+        if total_chars == 0:
+            return 0.0
         
         if language == 'amh':
             # Count Ethiopic characters
-            ethiopic_chars = sum(1 for char in clean_text if self._is_ethiopic_char(char))
-            ratio = ethiopic_chars / max(1, total_chars)
+            ethiopic_chars = sum(1 for char in meaningful_chars if self._is_ethiopic_char(char))
+            ratio = ethiopic_chars / total_chars
             
             # Boost confidence if we have a good amount of Ethiopic
             if ratio > 0.3:
-                return min(ratio * 1.5, 1.0)
+                return min(0.6 + (ratio * 0.4), 1.0)
+            elif ratio > 0.15:
+                return min(0.4 + (ratio * 0.6), 0.8)
             else:
-                return ratio
+                return ratio * 2
         
         elif language == 'eng':
             # Count Latin characters
-            latin_chars = sum(1 for char in clean_text if char.isalpha() and char.isascii())
-            ratio = latin_chars / max(1, total_chars)
+            latin_chars = sum(1 for char in meaningful_chars if char.isalpha() and char.isascii())
+            ratio = latin_chars / total_chars
             
             # Penalize if contains Ethiopic (shouldn't be in English text)
-            ethiopic_chars = sum(1 for char in clean_text if self._is_ethiopic_char(char))
-            penalty = ethiopic_chars * 0.5
+            ethiopic_chars = sum(1 for char in meaningful_chars if self._is_ethiopic_char(char))
+            ethiopic_ratio = ethiopic_chars / total_chars
             
-            return max(0.0, ratio - penalty)
+            # Strong penalty for Ethiopic presence
+            if ethiopic_ratio > 0.1:
+                return max(0.0, ratio - (ethiopic_ratio * 2))
+            else:
+                return ratio
         
         return 0.0
     

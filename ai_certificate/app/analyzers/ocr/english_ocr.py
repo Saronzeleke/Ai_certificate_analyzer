@@ -28,48 +28,69 @@ class EnglishOCREngine:
             'single_word': '--oem 3 --psm 8 -l eng --dpi 300'
         }
 
-        # Regex patterns for certificate fields
+        # Production-grade English field patterns (University + Training certificates)
         self.field_patterns = {
             'name': [
-                r'Name[:\s]*([A-Z][a-z]+(?: [A-Z][a-z]+){0,3})',
-                r'Student Name[:\s]*([A-Z][a-z]+(?: [A-Z][a-z]+){0,3})',
-                r'Candidate[:\s]*([A-Z][a-z]+(?: [A-Z][a-z]+){0,3})',
-                r'^\s*([A-Z][a-z]+(?: [A-Z][a-z]+){0,3})\s*$'
+                # Training/Accomplishment certificates: "AWARDED TO Name"
+                r'(?:AWARDED|GIVEN|PRESENTED)\s+TO\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})(?:\s+FOR|\s+HAS|\n|$)',
+                # Standard: "Name:" label
+                r'(?:Student\s+)?Name[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})',
+                # After "to" in lowercase context
+                r'(?:awarded|given|presented)\s+to\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4})',
+                # Standalone capitalized name (2-4 words) - last resort
+                r'\b([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b',
             ],
             'student_id': [
-                r'Student ID[:\s]*([A-Z0-9\-]{5,15})',
-                r'ID[:\s]*([A-Z0-9\-]{5,15})',
-                r'Registration No[:\s]*([A-Z0-9\-]{5,15})',
-                r'\b([A-Z]{2,3}\d{5,8})\b'
+                # Certificate/Statement number
+                r'#\s*([0-9,]+)',
+                r'Certificate\s+(?:No|Number)[:\s#]*([A-Z0-9\-,]+)',
+                r'Statement\s+(?:No|Number)[:\s#]*([A-Z0-9\-,]+)',
+                # Standard student ID
+                r'Student\s+ID[:\s]*([A-Z0-9\-]+\d+)',
+                r'ID[:\s]*([A-Z]{2,3}\d{5,})',
+                r'Registration\s+No[:\s]*([A-Z0-9\-]+)',
+                # Standalone ID pattern
+                r'\b([A-Z]{2,3}\d{5,8})\b',
             ],
             'university': [
-                r'University[:\s]*([A-Z][a-zA-Z\s&.,\-]{5,50})',
-                r'College[:\s]*([A-Z][a-zA-Z\s&.,\-]{5,50})',
-                r'Institution[:\s]*([A-Z][a-zA-Z\s&.,\-]{5,50})',
-                r'\b(University|College|Institute) of ([A-Z][a-zA-Z\s&.,\-]{3,40})\b'
+                # Organization/Platform for training certificates
+                r'(?:from|by|at)\s+([A-Z][a-zA-Z\s&.,\-]+?)(?:\s+LENGTH|\s+COMPLETED|\n|$)',
+                # Standard university patterns
+                r'University[:\s]+([A-Z][a-zA-Z\s&.,\-]+?)(?=\s+Course|\s+Program|\n|$)',
+                r'College[:\s]+([A-Z][a-zA-Z\s&.,\-]+?)(?=\s+Course|\s+Program|\n|$)',
+                r'\b((?:University|College|Institute)\s+of\s+[A-Z][a-zA-Z\s&.,\-]+)\b',
             ],
             'course': [
-                r'Course[:\s]*([A-Za-z\s&.,\-]{5,60})',
-                r'Program[:\s]*([A-Za-z\s&.,\-]{5,60})',
-                r'Degree[:\s]*([A-Za-z\s&.,\-]{5,60})',
-                r'in ([A-Za-z\s&.,\-]{5,60}) program'
+                # Training certificates: "COMPLETING Course Name"
+                r'(?:COMPLETING|COMPLETION\s+OF)\s+([A-Z][A-Za-z\s&.,\-]+?)(?=\s+LENGTH|\s+DURATION|\s+COMPLETED|\n|$)',
+                # Standard patterns
+                r'Course[:\s]+([A-Za-z\s&.,\-]+?)(?=\s+GPA|\s+Grade|\s+LENGTH|\n|$)',
+                r'Program[:\s]+([A-Za-z\s&.,\-]+?)(?=\s+GPA|\s+Grade|\s+LENGTH|\n|$)',
+                r'in\s+([A-Za-z\s&.,\-]{5,60})\s+(?:program|training|course)',
+            ],
+            'duration': [
+                # Training duration
+                r'LENGTH[:\s]+(\d+\s+(?:HRS|HOURS|DAYS|WEEKS|MONTHS))',
+                r'DURATION[:\s]+(\d+\s+(?:HRS|HOURS|DAYS|WEEKS|MONTHS))',
             ],
             'gpa': [
                 r'GPA[:\s]*([0-4]\.\d{1,2})',
-                r'Grade Point Average[:\s]*([0-4]\.\d{1,2})',
+                r'Grade\s+Point\s+Average[:\s]*([0-4]\.\d{1,2})',
                 r'CGPA[:\s]*([0-4]\.\d{1,2})',
-                r'\b([0-4]\.\d{2})\b'
+                # Standalone GPA (careful with this)
+                r'(?<![0-9])([0-4]\.\d{2})(?![0-9])',
             ],
             'issue_date': [
-                r'Date[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'Issued[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'Completed[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'(\d{1,2} (?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4})'
+                # Training certificates: "COMPLETED ON Date"
+                r'COMPLETED\s+ON\s+([A-Z]{3}\s+\d{1,2},\s+\d{4})',
+                r'(?:Date|Issued|Completed)[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
+                r'(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{1,2},\s+\d{4})',
+                r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})',
+                r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
             ],
             'expiry_date': [
-                r'Valid until[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'Expires[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'Expiry[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})'
+                r'(?:Valid\s+until|Expires|Expiry)[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
+                r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
             ]
         }
 

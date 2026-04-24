@@ -33,37 +33,51 @@ class AmharicOCREngine:
             'english_fallback': '--oem 3 --psm 6 -l eng --dpi 300'
         }
         
-        # Amharic field patterns (with English equivalents)
+        # Production-grade Amharic field patterns (University + Training certificates)
         self.field_patterns = {
             'name': [
-                r'ስም[:\s]*([\u1200-\u137F\s]+)',  # Amharic characters
-                r'Name[:\s]*([A-Z][a-z]+(?:\s[A-Z][a-z]+){1,3})',
-                r'^\s*([\u1200-\u137F\s]{2,})\s*$'  # Standalone Amharic name
+                # Training certificate: "ስም:" followed by name
+                r'ስም[:\s]+([\u1200-\u137F\s]+?)(?=\s*የተማሪ|\s*ዩኒቨርሲቲ|\s*ኮርስ|\s*የተሰጠበት|\n|$)',
+                # English fallback
+                r'Name[:\s]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})',
             ],
             'student_id': [
-                r'የተማሪ መታወቂያ[:\s]*([A-Z0-9\-]+)',
-                r'Student ID[:\s]*([A-Z0-9\-]+)',
-                r'ID[:\s]*([A-Z0-9\-]+)'
+                # Amharic with brackets support
+                r'የተማሪ\s+መታወቂያ[:\s]*([A-Z0-9\[\]]+\d+)',
+                r'መታወቂያ[:\s]*([A-Z0-9\[\]]+\d+)',
+                # English
+                r'Student\s+ID[:\s]*([A-Z0-9\-]+)',
+                r'ID[:\s]*([A-Z]{2,3}\d{5,})',
             ],
             'university': [
-                r'ዩኒቨርሲቲ[:\s]*([\u1200-\u137F\s\.\-]+)',
-                r'University[:\s]*([A-Za-z\s\.\-]+)',
-                r'College[:\s]*([A-Za-z\s\.\-]+)'
+                # Training certificate: "ዩኒቨርሲቲ:" or organization
+                r'ዩኒቨርሲቲ[:\s]+([\u1200-\u137F\s]+?)(?=\s*ኮርስ|\s*አማካይ|\s*የተሰጠበት|\n|$)',
+                # English
+                r'University[:\s]*([A-Z][a-zA-Z\s]+?)(?=\s+Course|\s+GPA|\n|$)',
             ],
             'course': [
-                r'ኮርስ[:\s]*([\u1200-\u137F\s\.\-]+)',
-                r'Course[:\s]*([A-Za-z\s\.\-]+)',
-                r'Program[:\s]*([A-Za-z\s\.\-]+)'
+                # Training certificate: "ኮርስ:" followed by course name (can be short)
+                r'ኮርስ[:\s]+([\u1200-\u137F\s]+?)(?=\s*አማካይ|\s*ነጥብ|\s*የተሰጠበት|\n|$)',
+                # English
+                r'Course[:\s]*([A-Za-z\s]+?)(?=\s+GPA|\s+Grade|\n|$)',
             ],
             'gpa': [
-                r'አማካይ ነጥብ[:\s]*([0-4]\.\d{1,2})',
+                # Amharic GPA patterns
+                r'አማካይ\s+ነጥብ[:\s]*([0-4]\.\d{1,2})',
+                r'ነጥብ[:\s]*([0-4]\.\d{1,2})',
+                # English
                 r'GPA[:\s]*([0-4]\.\d{1,2})',
-                r'\b([0-4]\.\d{2})\b'
+                # Standalone number (last resort)
+                r'(?<![0-9])([0-4]\.\d{2})(?![0-9])',
             ],
             'issue_date': [
-                r'የተሰጠበት ቀን[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'Date[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})',
-                r'(\d{1,2}/\d{1,2}/\d{4})'
+                # Training certificate: "የተሰጠበት ቀን:" followed by date
+                r'የተሰጠበት\s+ቀን[:\s]*(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
+                r'ቀን[:\s]*(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
+                # English
+                r'Date[:\s]*(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
+                # Any date
+                r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
             ]
         }
         
@@ -374,35 +388,82 @@ class AmharicOCREngine:
         return extracted
     
     def _validate_field(self, field: str, value: str, script_type: str) -> bool:
-        """Validate extracted field value for Amharic/English"""
+        """Production-grade field validation"""
         if not value:
             return False
         
-        # Basic validation
-        if len(value) < 2:
+        value = value.strip()
+        
+        if len(value) < 1:  # Allow single char for short courses
             return False
         
         # Field-specific validation
         if field == 'name':
             if script_type == "amharic":
-                # Check for Amharic characters
-                return self._contains_amharic(value) and len(value) >= 3
+                # Must have Amharic chars, no numbers, no field keywords
+                has_amharic = self._contains_amharic(value)
+                has_numbers = any(c.isdigit() for c in value)
+                bad_keywords = ['መታወቂያ', 'ዩኒቨርሲቲ', 'ኮርስ', 'ነጥብ', 'ቀን', 'ID', 'GPA', 'የተሰጠበት']
+                has_bad_keywords = any(kw in value for kw in bad_keywords)
+                return has_amharic and len(value) >= 3 and not has_numbers and not has_bad_keywords
             else:
-                # English name validation
+                # English: 2+ words, no numbers, no "FOR SUCCESSFULLY"
                 words = value.split()
-                return len(words) >= 2 and all(len(w) > 1 for w in words)
+                has_numbers = any(c.isdigit() for c in value)
+                bad_phrases = ['FOR SUCCESSFULLY', 'FOR COMPLETING', 'HAS BEEN']
+                has_bad_phrases = any(phrase in value.upper() for phrase in bad_phrases)
+                return len(words) >= 2 and all(len(w) > 1 for w in words) and not has_numbers and not has_bad_phrases
         
         elif field == 'student_id':
-            # Alphanumeric with minimum length
-            return any(c.isalnum() for c in value) and len(value) >= 5
+            # Must have at least one digit
+            clean_value = value.replace('[', '').replace(']', '').replace('-', '').replace(',', '').replace('#', '').replace(' ', '')
+            has_digit = any(c.isdigit() for c in clean_value)
+            return has_digit and 3 <= len(clean_value) <= 30
+        
+        elif field == 'university':
+            if script_type == "amharic":
+                has_amharic = self._contains_amharic(value)
+                # No GPA numbers, no bad keywords
+                has_gpa_pattern = bool(re.search(r'\d\.\d', value))
+                bad_keywords = ['ኮርስ', 'ነጥብ', 'ቀን', 'መታወቂያ', 'GPA', 'ID', 'የተሰጠበት']
+                has_bad_keywords = any(kw in value for kw in bad_keywords)
+                return has_amharic and len(value) >= 2 and not has_gpa_pattern and not has_bad_keywords
+            else:
+                # English: reasonable length, no GPA, not "STATEMENT OF"
+                has_gpa_pattern = bool(re.search(r'\d\.\d', value))
+                is_statement = 'STATEMENT OF' in value.upper()
+                return 2 <= len(value) <= 100 and not has_gpa_pattern and not is_statement
+        
+        elif field == 'course':
+            if script_type == "amharic":
+                has_amharic = self._contains_amharic(value)
+                # No GPA numbers, no bad keywords - allow short courses like "ህግ"
+                has_gpa_pattern = bool(re.search(r'\d\.\d', value))
+                bad_keywords = ['ነጥብ', 'ቀን', 'መታወቂያ', 'ዩኒቨርሲቲ', 'GPA', 'ID', 'የተሰጠበት', 'ስም']
+                has_bad_keywords = any(kw in value for kw in bad_keywords)
+                return has_amharic and len(value) >= 1 and not has_gpa_pattern and not has_bad_keywords
+            else:
+                # English: reasonable length, no GPA, not "LENGTH" or "COMPLETED"
+                has_gpa_pattern = bool(re.search(r'\d\.\d', value))
+                bad_words = ['LENGTH', 'COMPLETED', 'HRS', 'HOURS']
+                has_bad_words = any(word in value.upper() for word in bad_words)
+                return 2 <= len(value) <= 100 and not has_gpa_pattern and not has_bad_words
         
         elif field == 'gpa':
-            # GPA validation
+            # Must be valid GPA number
             try:
-                gpa = float(value)
-                return 0.0 <= gpa <= 4.0
+                gpa_val = float(value)
+                return 0.0 <= gpa_val <= 4.0
             except:
                 return False
+        
+        elif field == 'issue_date':
+            # Must match date pattern
+            return bool(re.search(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', value)) or bool(re.search(r'[A-Z]{3}\s+\d{1,2},\s+\d{4}', value))
+        
+        elif field == 'duration':
+            # Training duration validation
+            return bool(re.search(r'\d+\s+(?:HRS|HOURS|DAYS|WEEKS|MONTHS)', value.upper()))
         
         return True
     

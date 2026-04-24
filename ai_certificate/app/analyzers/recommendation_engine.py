@@ -96,6 +96,17 @@ class RecommendationResult(BaseModel):
 
     class Config:
         use_enum_values = True
+    
+    def dict(self, *args, **kwargs):
+        """Override dict to ensure JSON serialization"""
+        d = super().dict(*args, **kwargs)
+        if 'timestamp' in d and isinstance(d['timestamp'], datetime):
+            d['timestamp'] = d['timestamp'].isoformat()
+        return d
+    
+    def json(self, *args, **kwargs):
+        """Override json for proper serialization"""
+        return super().json(*args, **kwargs)
 
 
 # ---------------------------
